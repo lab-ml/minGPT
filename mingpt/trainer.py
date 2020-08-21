@@ -9,13 +9,12 @@ import math
 import numpy as np
 import torch
 import torch.optim as optim
+from labml import tracker, monit, logger
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 
 from labml.configs import BaseConfigs, option
 from mingpt.model import GPTConfig
-
-logger = logging.getLogger(__name__)
 
 
 class TrainerConfig(BaseConfigs):
@@ -73,7 +72,7 @@ class Trainer:
     def save_checkpoint(self):
         if self.config.ckpt_path is not None:
             ckpt_model = self.model.module if hasattr(self.model, "module") else self.model
-            logger.info("saving %s", self.config.ckpt_path)
+            print("saving %s", self.config.ckpt_path)
             torch.save(ckpt_model.state_dict(), self.config.ckpt_path)
 
     def run_epoch(self, split, epoch):
@@ -85,9 +84,7 @@ class Trainer:
         loader = DataLoader(data, batch_size=config.batch_size, num_workers=config.num_workers)
 
         losses = []
-        pbar = tqdm(enumerate(loader), total=len(loader)) if is_train else enumerate(loader)
-        for it, (x, y) in pbar:
-
+        for it, (x, y) in monit.enum(split, loader):
             # place data on the correct device
             x = x.to(self.device)
             y = y.to(self.device)
@@ -124,16 +121,19 @@ class Trainer:
                     lr = config.learning_rate
 
                 # report progress
-                pbar.set_description(f"epoch {epoch + 1} iter {it}: train loss {loss.item():.5f}. lr {lr:e}")
+                tracker.save({f'loss.{split}': loss, f'lr': lr})
 
-        if not is_train:
-            logger.info("test loss: %f", np.mean(losses))
+        # if not is_train:
+        #     logger.info("test loss: %f", np.mean(losses))
 
     def train(self):
         self.tokens = 0  # counter used for learning rate decay
-        for epoch in range(self.config.max_epochs):
+        tracker.set_scalar('*', True)
+        for epoch in monit.loop(self.config.max_epochs):
             self.run_epoch('train', epoch)
             if self.test_dataset is not None:
                 self.run_epoch('test', epoch)
+
+            logger.log()
 
             self.save_checkpoint()
